@@ -275,9 +275,38 @@ function tabellenSpeicherMachen({ datenbank, schema = SCHEMA, journalDatei = nul
   // Neueste zuerst, wie die Monatsdateien
   const protokollLesen = ({ anzahl = 50 } = {}) => (istBereit() ? protokoll.slice(-Math.max(0, anzahl)).reverse().map((z) => ({ ...z })) : [])
 
+  // Für die Übernahme (Schritt N4): fertige Protokollzeilen unverändert übernehmen (Adressen sind schon gekürzt)
+  const protokollUebernehmen = (zeilen) => {
+    if (!istBereit()) throw nichtGeladen()
+    const liste = (Array.isArray(zeilen) ? zeilen : []).filter((z) => z && typeof z === 'object' && z.zeit)
+    protokoll.push(...liste)
+    protokollOffen.push(...liste)
+    if (liste.length) anstossen()
+    return liste.length
+  }
+  // Sind die Tabellen leer? Die Übernahme schreibt nur in leere Tabellen.
+  const istLeer = () => {
+    if (!istBereit()) throw nichtGeladen()
+    const z = zerlegen(stand)
+    return protokoll.length === 0 && z.namen.size === 0 && z.einstellungen.size === 0 && Object.values(z.listen).every((m) => m.size === 0)
+  }
+  // Alle Zeilen löschen (nur für eine abgebrochene Übernahme); danach ist der Speicher leer und nicht mehr nutzbar
+  async function leeren() {
+    if (zeitgeber) { clearTimeout(zeitgeber); zeitgeber = null }
+    if (wiederholung) { clearTimeout(wiederholung); wiederholung = null }
+    if (laufend) await laufend.catch(() => {})
+    schmutzig = false
+    protokollOffen = []
+    await datenbank.transaktion(async (c) => {
+      for (const t of [...Object.keys(TABELLEN), 'ergebnis_bestellungen', 'ergebnis_namen', 'einstellungen', 'protokoll']) await c.query(`DELETE FROM ${schema}.${t}`)
+    })
+    journalLoeschen()
+    stand = null
+  }
+
   const zustand = () => ({ modus: 'tabellen', geladen: istBereit(), offen: schmutzig || protokollOffen.length > 0, letzterFehler })
 
-  return { modus: 'tabellen', laden, bereit, istBereit, lesen, speichern, festschreiben, protokollSchreiben, protokollLesen, zustand }
+  return { modus: 'tabellen', laden, bereit, istBereit, lesen, speichern, festschreiben, protokollSchreiben, protokollLesen, protokollUebernehmen, istLeer, leeren, zustand }
 }
 
 module.exports = { tabellenSpeicherMachen, zerlegen, unterschied, tabellenLesen, PROTOKOLL_MAX }

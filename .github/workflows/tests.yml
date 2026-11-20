@@ -53,4 +53,4 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Datenbank-Tests
-        run: node --test tests/newsletter-db.test.js tests/newsletter-speicher-tabellen.test.js
+        run: node --test tests/newsletter-db.test.js tests/newsletter-speicher-tabellen.test.js tests/newsletter-uebernahme.test.js

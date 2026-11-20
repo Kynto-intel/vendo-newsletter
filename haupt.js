@@ -75,6 +75,8 @@ const ERGEBNIS_TAKT = 86400000 // Bestellungen mit UTM-Angaben einmal am Tag hol
 // bleibt dabei im require-Cache. Ohne diesen Schutz liefen mehrere Zeitgeber gleichzeitig
 // und würden Mails doppelt verschicken.
 let taktLaeuft = false
+// Arbeitet der Takt gerade (Versand, Auslöser)? Die Übernahme in die Tabellen wartet, bis er fertig ist.
+let taktArbeitet = false
 // Dasselbe für den Eingangskorb der Bots: genau ein Zeitgeber, sonst liefe ein Auftrag doppelt
 let eingangLaeuft = false
 // … und für den Abgleich der Entwurfsdateien
@@ -90,6 +92,8 @@ module.exports = (ctx) => {
   // braucht nur der Tabellen-Speicher (Schritt N3); Tests setzen `ctx.journalDatei` selbst.
   const speicher = speicherMachen(ctx, {
     protokollOrdner,
+    // Sicherung vor der Übernahme in die Tabellen (Schritt N4); Tests setzen den Ordner selbst
+    sicherungOrdner: ctx.sicherungOrdner || vendoDaten,
     journalDatei: ctx.journalDatei !== undefined ? ctx.journalDatei : path.join(vendoDaten, 'tabellen-journal.json')
   })
   const datenLesen = speicher.lesen
@@ -481,6 +485,34 @@ module.exports = (ctx) => {
   }
 
   // Zahlen für die Kacheln der Übersicht. Die Oberfläche lädt die Plugin-Daten nicht mehr selbst (Schritt N1).
+  // ── Speicher: Zustand und Übernahme in die Datenbank-Tabellen (Schritt N4) ──
+  bereitstellen('speicherZustand', () => {
+    const z = speicher.zustand()
+    return { modus: z.modus, offen: Boolean(z.offen), letzterFehler: z.letzterFehler || null, uebernahmeLaeuft: Boolean(z.uebernahmeLaeuft) }
+  })
+
+  // Nur an einem ruhigen Moment: keine laufende oder angehaltene Kampagne, nichts in der Warteschlange
+  const uebernahmeHindernis = (daten) => {
+    const unterwegsK = daten.kampagnen.filter(unterwegs)
+    if (unterwegsK.length) return `Erst wenn keine Kampagne mehr läuft oder angehalten ist (${unterwegsK.map((k) => `„${k.name}“`).join(', ')}).`
+    const offen = daten.warteschlange.filter((e) => e.zustand === 'offen' || e.zustand === 'sendet').length
+    if (offen) return `Erst wenn die Warteschlange leer ist (${offen} Mail(s) offen).`
+    return null
+  }
+
+  bereitstellen('tabellenUebernehmen', async () => {
+    const ergebnis = await speicher.inTabellenUebernehmen({
+      vorher: uebernahmeHindernis,
+      ruhe: async () => {
+        const bis = Date.now() + 120_000
+        while (taktArbeitet && Date.now() < bis) await new Promise((r) => setTimeout(r, 200))
+        if (taktArbeitet) throw new Error('Der Versandtakt ist nach zwei Minuten noch nicht fertig.')
+      }
+    })
+    console.log(`Newsletter: Übernahme in die Datenbank-Tabellen - ${ergebnis.ok ? 'fertig' : 'nicht ausgeführt'}: ${ergebnis.text}`)
+    return ergebnis
+  })
+
   bereitstellen('uebersichtLesen', () => {
     const d = datenLesen()
     return {
@@ -3101,6 +3133,7 @@ module.exports = (ctx) => {
     setInterval(async () => {
       if (beschaeftigt || !speicher.istBereit()) return // ein Versand kann länger dauern als der Takt; Speicher lädt noch
       beschaeftigt = true
+      taktArbeitet = true
       try {
         kampagnenPflegen()
         laeufeAbarbeiten()
@@ -3137,6 +3170,7 @@ module.exports = (ctx) => {
         console.warn(`Newsletter: Takt-Fehler: ${fehler?.message || fehler}`)
       } finally {
         beschaeftigt = false
+        taktArbeitet = false
       }
     }, TAKT).unref?.()
 

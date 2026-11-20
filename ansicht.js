@@ -31,6 +31,7 @@ export async function starten(ctx) {
   // Zahlen für die Übersicht. Die Plugin-Daten selbst lädt die Oberfläche nicht (Schritt N1 des PostgreSQL-Umbaus):
   // alles läuft über die Funktionen des Hintergrundteils
   let zahlen = {}
+  let speicherStand = null // Zustand des Speichers (Plugin-Speicher oder Datenbank-Tabellen), im Reiter „Zugang“
   let zugang = null
   let drossel = null
   let schlange = null
@@ -107,6 +108,7 @@ export async function starten(ctx) {
   }
 
   const zahlenHolen = async () => (zahlen = (await stillHolen('uebersichtLesen')) || zahlen)
+  const speicherHolen = async () => (speicherStand = await stillHolen('speicherZustand'))
   const zugangHolen = async () => (zugang = await stillHolen('zugangLesen'))
   const drosselHolen = async () => (drossel = await stillHolen('drosselLesen'))
   const schlangeHolen = async () => (schlange = await stillHolen('warteschlangeLesen'))
@@ -132,7 +134,7 @@ export async function starten(ctx) {
     if (bereich === 'kampagnen') await Promise.all([kampagnenHolen(), markeHolen(), vorlagenHolen(), kErgebnisseHolen(), zustellHolen()])
     if (bereich === 'automationen') await Promise.all([autosHolen(), laeufeHolen(), vorlagenHolen(), aErgebnisseHolen()])
     if (bereich === 'vorlagen') await Promise.all([vorlagenHolen(), markeHolen()])
-    if (bereich === 'zugang') await markeHolen()
+    if (bereich === 'zugang') await Promise.all([markeHolen(), speicherHolen()])
     if (bereich === 'protokoll') await protokollHolen()
     // Vendo ruft laden() jede Minute auf, solange der Bereich offen ist. Bei offenem Editor
     // nicht neu zeichnen: das würde das Code-Feld neu aufbauen, Cursor und Scrollstelle
@@ -167,6 +169,7 @@ export async function starten(ctx) {
   // Was nicht geladen werden konnte, mit dem Bereich in Worten
   const LADE_NAMEN = {
     uebersichtLesen: 'Übersicht',
+    speicherZustand: 'Speicher',
     zugangLesen: 'Zugang',
     drosselLesen: 'Drossel',
     warteschlangeLesen: 'Warteschlange',
@@ -1160,7 +1163,32 @@ export async function starten(ctx) {
       </details>
       ${markeBlock()}
       ${drosselBlock()}
-      ${testmailBlock()}`
+      ${testmailBlock()}
+      ${speicherBlock()}`
+  }
+
+  // Wo die Newsletter-Daten liegen, und der einmalige Umzug in eigene Datenbank-Tabellen (Schritt N4)
+  function speicherBlock() {
+    if (!speicherStand) return ''
+    const s = speicherStand
+    const inTabellen = s.modus === 'tabellen'
+    return `
+      <details class="nl-detail-karte nl-kontakt-klapp">
+        <summary><span>Speicher</span></summary>
+        <div class="nl-form">
+          <p class="nl-form-text">${inTabellen
+            ? 'Die Newsletter-Daten liegen in eigenen Tabellen in Vendos Datenbank (Schema <code>newsletter</code>), das Versandprotokoll ebenfalls.'
+            : 'Die Newsletter-Daten liegen in Vendos gemeinsamem Plugin-Speicher (höchstens etwa 5 MB), das Versandprotokoll in Monatsdateien.'}</p>
+          ${s.letzterFehler ? `<div class="nl-warnung">Letzter Schreibfehler: ${m(s.letzterFehler)}. Der Stand liegt im Journal und wird nachgeschrieben.</div>` : ''}
+          ${inTabellen ? '' : `
+          <p class="nl-form-text leise">Der Umzug kopiert alles in eigene Tabellen, vergleicht danach jeden Eintrag und schaltet
+          erst dann um. Vorher legt er eine Sicherung als Datei unter <code>daten/plugins/newsletter/</code> an. Er geht nur,
+          wenn keine Kampagne läuft oder angehalten ist und die Warteschlange leer ist; währenddessen wird nichts versendet.</p>
+          <div class="nl-knoepfe">
+            <button class="knopf-flach" data-nl="speicher-uebernehmen" type="button" ${s.uebernahmeLaeuft ? 'disabled' : ''}>In Datenbank-Tabellen umziehen</button>
+          </div>`}
+        </div>
+      </details>`
   }
 
   function markeBlock() {
@@ -1717,7 +1745,7 @@ export async function starten(ctx) {
       vorschau = null
       vorschauDaten = null
       autoVorschau = null
-      if (bereich === 'zugang' || bereich === 'uebersicht') await Promise.all([zugangHolen(), drosselHolen(), schlangeHolen(), markeHolen()])
+      if (bereich === 'zugang' || bereich === 'uebersicht') await Promise.all([zugangHolen(), drosselHolen(), schlangeHolen(), markeHolen(), speicherHolen()])
       if (bereich === 'uebersicht') await Promise.all([rennerHolen(), zustellHolen()])
       if (bereich === 'kontakte') await Promise.all([shopifyHolen(), kontakteHolen(), abmeldungenHolen(), rueckHolen()])
       if (bereich === 'kampagnen') await Promise.all([kampagnenHolen(), markeHolen(), vorlagenHolen(), kErgebnisseHolen(), zustellHolen()])
@@ -1836,6 +1864,16 @@ export async function starten(ctx) {
       zeichnen()
       const ergebnis = await holen('ruecklaeuferVerbindungPruefen')
       kontaktMeldung = { ok: Boolean(ergebnis?.ok), text: ergebnis?.text || 'Prüfung nicht möglich.' }
+      return zeichnen()
+    }
+    if (aktion === 'speicher-uebernehmen') {
+      const ja = await ctx.bestaetigen('Alle Newsletter-Daten und das Versandprotokoll in eigene Datenbank-Tabellen umziehen? Vorher wird eine Sicherung angelegt; stimmt der Abgleich nicht, bleibt alles beim Alten.', { titel: 'In Datenbank-Tabellen umziehen', ja: 'Umziehen', gefahr: true })
+      if (!ja) return
+      meldung = { ok: true, text: 'Ziehe um …' }
+      zeichnen()
+      const ergebnis = await holen('tabellenUebernehmen')
+      meldung = { ok: Boolean(ergebnis?.ok), text: ergebnis?.text || 'Nicht möglich.' }
+      await speicherHolen()
       return zeichnen()
     }
     if (aktion === 'rueck-jetzt') {
