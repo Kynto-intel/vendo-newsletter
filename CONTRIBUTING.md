@@ -36,7 +36,7 @@ Regeln für den Code:
 
 - Electron nur in `tresor.js`; der übrige Code läuft auch in einem normalen Node-Prozess.
 - Vendos Datenordner aus `ctx.ordner` ableiten, nie aus `__dirname` (das Plugin ist in Vendo eine Verknüpfung).
-- Plugin-Daten nur über `ctx.datenLaden`/`ctx.datenSpeichern`.
+- Plugin-Daten nur über `speicher.js`; vor SMTP-Versand oder dem Markieren von Mails `await speicher.festschreiben()`.
 - Geheimnisse nur verschlüsselt speichern, nie an die Oberfläche zurückgeben.
 - Versenden, Planen und Einschalten von Automationen bleibt einem Menschen vorbehalten.
 - Keine neuen Abhängigkeiten ohne Begründung im Pull Request.

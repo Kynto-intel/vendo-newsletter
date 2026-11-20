@@ -64,6 +64,7 @@ const entwurfsdateien = require('./entwurfsdateien.js')
 const { mailAusHtml, beispielHtml, hatInhalt, fremdePlatzhalter, felderLesen, unveraendertAusVorlage, aufbauAehnlichkeit, starreSpalten, hausregelVerstoesse, produkteOhneText, PRODUKTTEXT_MIN, utmAnhaengen, MAX_HTML } = require('./html-mail.js')
 const shoplinks = require('./shoplinks.js')
 const { protokollSchreiben, protokollLesen } = require('./protokoll.js')
+const { speicherMachen } = require('./speicher.js')
 
 const TAKT = 15000 // so oft schaut der Hintergrundteil in die Warteschlange
 const AUFRAEUM_TAKT = 3600000 // einmal pro Stunde Erledigtes wegräumen
@@ -96,24 +97,9 @@ module.exports = (ctx) => {
 
   const tresor = tresorMachen()
 
-  const datenLesen = () => {
-    const d = ctx.datenLaden() || {}
-    return {
-      ...d,
-      zugang: d.zugang || {},
-      shopify: d.shopify || {},
-      einstellungen: d.einstellungen || {},
-      marke: d.marke || {},
-      drossel: d.drossel || {},
-      warteschlange: Array.isArray(d.warteschlange) ? d.warteschlange : [],
-      kontakte: Array.isArray(d.kontakte) ? d.kontakte : [],
-      kampagnen: Array.isArray(d.kampagnen) ? d.kampagnen : [],
-      vorlagen: Array.isArray(d.vorlagen) ? d.vorlagen : [],
-      automationen: Array.isArray(d.automationen) ? d.automationen : [],
-      laeufe: Array.isArray(d.laeufe) ? d.laeufe : [],
-      ruecklaeufer: Array.isArray(d.ruecklaeufer) ? d.ruecklaeufer : []
-    }
-  }
+  // Alles Lesen und Schreiben der Plugin-Daten läuft über speicher.js (Schritt N1 des PostgreSQL-Umbaus)
+  const speicher = speicherMachen(ctx)
+  const datenLesen = speicher.lesen
 
   // Läuft oder ist angehalten: Mails dieser Kampagne stehen noch in der Warteschlange
   const unterwegs = (k) => k?.zustand === 'laeuft' || k?.zustand === 'pausiert'
@@ -150,11 +136,7 @@ module.exports = (ctx) => {
     nachname: daten.zugang.testNachname || 'Nachname'
   })
 
-  const feldSpeichern = (feld, wert) => {
-    const d = datenLesen()
-    d[feld] = wert
-    ctx.datenSpeichern(d)
-  }
+  const feldSpeichern = speicher.feldSpeichern
 
   // Was jede Mail gebracht hat (ergebnisse.js): Kurznamen und zugeordnete Bestellungen
   const ergebnisseVon = (daten) => {
@@ -170,7 +152,7 @@ module.exports = (ctx) => {
     const gemerkt = ergebnisse.nameMerken(e.namen, kurz, ziel)
     if (!gemerkt.neu) return
     d.ergebnisse = { ...e, namen: gemerkt.namen }
-    ctx.datenSpeichern(d)
+    speicher.speichern(d)
   }
 
   // Drossel aus den gespeicherten Zeitstempeln aufbauen. Der Zustand muss einen Neustart
@@ -243,7 +225,7 @@ module.exports = (ctx) => {
     }
 
     daten.zugang = { ...geprueft.wert, passwortVerschluesselt: verschluesselt }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Zugang gespeichert fuer ${kuerzen(geprueft.wert.benutzer)} (${geprueft.wert.host}:${geprueft.wert.port})`)
     return { ok: true, passwortGesetzt: Boolean(verschluesselt) }
   })
@@ -258,7 +240,7 @@ module.exports = (ctx) => {
       // Das Postfach selbst braucht nicht gemerkt zu werden
       if (daten.zugang.testAdresse) {
         daten.zugang = { ...daten.zugang, testAdresse: '' }
-        ctx.datenSpeichern(daten)
+        speicher.speichern(daten)
       }
       return { ok: true, testAdresse: '' }
     }
@@ -267,7 +249,7 @@ module.exports = (ctx) => {
     if ((daten.zugang.testAdresse || '') === geprueft.wert.testAdresse) return { ok: true, testAdresse: geprueft.wert.testAdresse }
 
     daten.zugang = { ...daten.zugang, testAdresse: geprueft.wert.testAdresse }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Testmails gehen jetzt an ${kuerzen(geprueft.wert.testAdresse || daten.zugang.benutzer)}.`)
     return { ok: true, testAdresse: geprueft.wert.testAdresse }
   })
@@ -279,7 +261,7 @@ module.exports = (ctx) => {
     const eigene = geprueft.fehler.filter((f) => f.includes('für Testmails'))
     if (eigene.length) return { ok: false, fehler: eigene }
     daten.zugang = { ...daten.zugang, testVorname: geprueft.wert.testVorname, testNachname: geprueft.wert.testNachname }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, testVorname: geprueft.wert.testVorname, testNachname: geprueft.wert.testNachname }
   })
 
@@ -312,7 +294,7 @@ module.exports = (ctx) => {
     const budget = budgetPruefen(wert)
     const daten = datenLesen()
     daten.einstellungen = { ...daten.einstellungen, budgetProStunde: budget }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Stundenbudget auf ${budget} Mails gesetzt.`)
     return { ok: true, budget }
   })
@@ -462,6 +444,9 @@ module.exports = (ctx) => {
     // Vor dem Versand festhalten, dass er unterwegs ist. Stürzt Vendo ab, nachdem der Server
     // die Mail angenommen hat, steht der Eintrag danach auf `sendet` statt wieder auf `offen`.
     feldSpeichern('warteschlange', warteschlange.versandBeginnen(daten.warteschlange, eintrag.id))
+    // Erst wenn `sendet` dauerhaft liegt, geht die Mail raus: sonst stünde der Eintrag nach einem Absturz wieder auf
+    // `offen` und würde ein zweites Mal verschickt
+    await speicher.festschreiben()
 
     let ergebnis
     try {
@@ -486,11 +471,23 @@ module.exports = (ctx) => {
     const liste = datenLesen().warteschlange
     if (ergebnis.ok) {
       feldSpeichern('warteschlange', warteschlange.erfolgMerken(liste, eintrag.id))
+      await speicher.festschreiben()
       return { gesendet: true, an: eintrag.an }
     }
     feldSpeichern('warteschlange', warteschlange.fehlschlagMerken(liste, eintrag.id, ergebnis.fehler?.code || ergebnis.text))
     return { fehler: ergebnis.text }
   }
+
+  // Zahlen für die Kacheln der Übersicht. Die Oberfläche lädt die Plugin-Daten nicht mehr selbst (Schritt N1).
+  bereitstellen('uebersichtLesen', () => {
+    const d = datenLesen()
+    return {
+      kampagnen: d.kampagnen.length,
+      geplantOderLaufend: d.kampagnen.filter((k) => k.zustand === 'laeuft' || k.zustand === 'geplant').length,
+      freigaben: d.kampagnen.filter((k) => k.zustand === 'freigabe').length,
+      automationenAktiv: d.automationen.filter((a) => a.aktiv).length
+    }
+  })
 
   bereitstellen('warteschlangeLesen', () => {
     const daten = datenLesen()
@@ -573,7 +570,7 @@ module.exports = (ctx) => {
       letzterSync: Date.now(),
       letzterSyncText: `${zusammen.angelegt} neu, ${zusammen.aktualisiert} aktualisiert, ${zusammen.gesperrtGelassen} gesperrt gelassen`
     }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
 
     const nachStand = kontakte.stand(abgemeldet.liste)
     const text = [
@@ -633,6 +630,7 @@ module.exports = (ctx) => {
 
     const gesperrt = kontakte.sperren(daten.kontakte, email, { grund })
     feldSpeichern('kontakte', gesperrt.liste)
+    await speicher.festschreiben() // eine Sperre darf nie verloren gehen
     console.log(`Newsletter: ${kuerzen(email)} gesperrt (${grund}).`)
 
     if (!kontakt.shopifyId) {
@@ -669,7 +667,7 @@ module.exports = (ctx) => {
     const ziel = String(eingabe.email || '').trim().toLowerCase()
     daten.kontakte = ergebnis.liste
     daten.ruecklaeufer = daten.ruecklaeufer.filter((e) => e.email !== ziel)
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: ${kuerzen(eingabe.email)} vollstaendig geloescht.`)
     return { ok: true, text: 'Vollständig gelöscht. Stimmt die Adresse bei Shopify weiter zu, holt der nächste Sync sie wieder herein — dann besser sperren.' }
   })
@@ -762,7 +760,7 @@ module.exports = (ctx) => {
       fuss: fuss.wert || fuss,
       kopf: kopf.wert || kopf
     }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log('Newsletter: Markenangaben gespeichert.')
     return { ok: true, verworfen: [...(fuss.verworfen || []), ...(kopf.verworfen || [])] }
   })
@@ -804,7 +802,7 @@ module.exports = (ctx) => {
     const daten = datenLesen()
     const kampagne = kampagnen.neueKampagne({ name, marke: daten.marke })
     daten.kampagnen = [...daten.kampagnen, kampagne]
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, id: kampagne.id }
   })
 
@@ -825,7 +823,7 @@ module.exports = (ctx) => {
     }
     const geaendert = kampagnen.kampagneAendern(daten.kampagnen, kampagne.id, aenderung)
     daten.kampagnen = geaendert.liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     const geprueft = kampagnePruefenMitMarke(datenLesen(), kampagne.id)
     return { ok: true, hinweise: geprueft.fehler }
   })
@@ -836,7 +834,7 @@ module.exports = (ctx) => {
     if (!kampagne) return { ok: false, text: 'Diese Kampagne gibt es nicht.' }
     if (unterwegs(kampagne)) return { ok: false, text: 'Die Kampagne läuft gerade oder ist angehalten. Erst abbrechen.' }
     daten.kampagnen = daten.kampagnen.filter((k) => k.id !== id)
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Kampagne "${kampagne.name}" geloescht.`)
     return { ok: true, text: 'Kampagne gelöscht.' }
   })
@@ -954,7 +952,8 @@ module.exports = (ctx) => {
       geplantAm: null,
       eingereiht: (kampagne.eingereiht || 0) + eingereiht.eingereiht
     }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
+    speicher.festschreiben() // sofort schreiben statt nach Vendos kurzer Sammelpause; gesendet wird erst im nächsten Takt
     console.log(`Newsletter: Kampagne "${kampagne.name}" gestartet - ${eingereiht.eingereiht} eingereiht, ${eingereiht.uebersprungen} uebersprungen.`)
     return { ok: true, eingereiht: eingereiht.eingereiht, uebersprungen: eingereiht.uebersprungen, empfaenger: empfaenger.length }
   }
@@ -968,7 +967,7 @@ module.exports = (ctx) => {
     const zeitpunkt = Number(eingabe.geplantAm)
     if (!Number.isFinite(zeitpunkt) || zeitpunkt < Date.now()) return { ok: false, fehler: ['Der Zeitpunkt liegt in der Vergangenheit.'] }
     daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, eingabe.id, { zustand: 'geplant', geplantAm: zeitpunkt, freigabe: null }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Kampagne "${geprueft.kampagne.name}" geplant fuer ${new Date(zeitpunkt).toISOString()}.`)
     return { ok: true }
   })
@@ -980,7 +979,7 @@ module.exports = (ctx) => {
     const verworfen = warteschlange.offeneVerwerfen(daten.warteschlange, { kampagneId: id })
     daten.warteschlange = verworfen.liste
     daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, id, { zustand: 'abgebrochen', geplantAm: null }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Kampagne "${kampagne.name}" abgebrochen, ${verworfen.anzahl} Eintraege verworfen.`)
     return { ok: true, text: `Abgebrochen, ${verworfen.anzahl} offene Einträge verworfen.` }
   })
@@ -989,7 +988,7 @@ module.exports = (ctx) => {
     const daten = datenLesen()
     if (!kampagneHolen(daten, id)) return { ok: false, text: 'Diese Kampagne gibt es nicht.' }
     daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, id, { zustand: 'entwurf', geplantAm: null, freigabe: null }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, text: 'Wieder im Entwurf.' }
   })
 
@@ -1033,7 +1032,7 @@ module.exports = (ctx) => {
       // deshalb steht es in der Meldung.
       html: inhaltAus(bausteine, { marke: daten.marke })
     }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Entwurf von Luzzy uebernommen (${gelesen.bausteine.length} Bausteine als HTML).`)
     return { ok: true, text: `Übernommen: Betreff und ein Entwurf aus ${gelesen.bausteine.length} Bausteinen, als HTML im Code-Feld. Das bisherige HTML wurde ersetzt.` }
   })
@@ -1121,7 +1120,7 @@ module.exports = (ctx) => {
     if (daten.vorlagen.length >= vorlagen.MAX_VORLAGEN) return { ok: false, text: `Mehr als ${vorlagen.MAX_VORLAGEN} Vorlagen sind nicht vorgesehen.` }
     const neu = vorlagen.neueVorlage({ name: eingabe.name, beschreibung: eingabe.beschreibung, marke: daten.marke })
     daten.vorlagen = [...daten.vorlagen, neu]
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, id: neu.id }
   })
 
@@ -1146,7 +1145,7 @@ module.exports = (ctx) => {
     const ziel = vorlageZumAendern(daten, eingabe.id)
     if (!ziel.ok) return { ok: false, fehler: [ziel.text] }
     daten.vorlagen = vorlagen.vorlageAendern(daten.vorlagen, ziel.vorlage.id, aenderung).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return {
       ok: true,
       id: ziel.vorlage.id,
@@ -1164,7 +1163,7 @@ module.exports = (ctx) => {
     if (v.muster) return { ok: false, text: `„${v.name}" ist ein Muster aus dem Plugin-Ordner und lässt sich hier nicht löschen. Ungeändert bleibt es einfach stehen.` }
     const herkunft = musterVon(v)
     daten.vorlagen = daten.vorlagen.filter((x) => x.id !== id)
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     const nochKopien = daten.vorlagen.some((x) => musterVon(x) === herkunft)
     return { ok: true, name: v.name, text: herkunft && !nochKopien ? `Eigene Fassung gelöscht — „${v.name}" steht wieder als Muster da.` : 'Vorlage gelöscht.' }
   }
@@ -1205,7 +1204,7 @@ module.exports = (ctx) => {
       marke: daten.marke
     })
     daten.vorlagen = [...daten.vorlagen, neu]
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Vorlage "${neu.name}" gesichert.`)
     return { ok: true, id: neu.id, text: `Als Vorlage „${neu.name}“ gesichert.` }
   })
@@ -1222,7 +1221,7 @@ module.exports = (ctx) => {
       if (!kampagne) return { ok: false, text: 'Diese Kampagne gibt es nicht.' }
       if (unterwegs(kampagne)) return { ok: false, text: 'Die Kampagne läuft gerade oder ist angehalten.' }
       daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, kampagne.id, { html: inhalt.html, htmlRahmen: inhalt.htmlRahmen }).liste
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: `Vorlage „${vorlage.name}“ übernommen. Texte jetzt anpassen.` }
     }
 
@@ -1233,7 +1232,7 @@ module.exports = (ctx) => {
       const schritte = (automation.schritte || []).map((s, i) => (i === nummer ? { ...s, html: inhalt.html } : s))
       if (!schritte[nummer]) return { ok: false, text: 'Diesen Schritt gibt es nicht.' }
       daten.automationen = daten.automationen.map((a) => (a.id === automation.id ? { ...a, schritte, geaendertAm: Date.now() } : a))
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: `Vorlage „${vorlage.name}“ auf Schritt ${nummer + 1} übernommen.` }
     }
 
@@ -1256,7 +1255,7 @@ module.exports = (ctx) => {
       if (daten.vorlagen.length >= vorlagen.MAX_VORLAGEN) return { ok: false, text: `Mehr als ${vorlagen.MAX_VORLAGEN} Vorlagen sind nicht vorgesehen.` }
       const neu = vorlagen.neueVorlage({ name: gelesen.name || 'Entwurf von Luzzy', beschreibung: gelesen.beschreibung, html: inhaltAus(gelesen.bausteine, { marke: daten.marke, felder: true }), marke: daten.marke })
       daten.vorlagen = [...daten.vorlagen, neu]
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       console.log(`Newsletter: Vorlage "${neu.name}" von Luzzy entworfen (${gelesen.bausteine.length} Bausteine als HTML).`)
       return { ok: true, id: neu.id, text: `Vorlage „${neu.name}“ angelegt, als HTML im Code-Feld. Vorschau prüfen.` }
     }
@@ -1270,7 +1269,7 @@ module.exports = (ctx) => {
       // Luzzys Entwurf wird zu HTML (siehe kiAntwortUebernehmen); das bisherige wird ersetzt
       html: inhaltAus(gelesen.bausteine, { marke: daten.marke, felder: true })
     }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, id: vorlage.id, text: `Übernommen: ein Entwurf aus ${gelesen.bausteine.length} Bausteinen, als HTML im Code-Feld. Das bisherige HTML wurde ersetzt.` }
   })
 
@@ -1314,7 +1313,7 @@ module.exports = (ctx) => {
     const daten = datenLesen()
     if (daten.automationen.some((a) => a.art === art)) return { ok: false, text: 'Diese Automation gibt es schon.' }
     daten.automationen = [...daten.automationen, neu]
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, id: neu.id }
   })
 
@@ -1356,7 +1355,7 @@ module.exports = (ctx) => {
           }
         : a
     )
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     const geprueft = automationen.automationPruefen(automationHolen(datenLesen(), automation.id))
     return { ok: true, hinweise: geprueft.fehler }
   })
@@ -1395,7 +1394,7 @@ module.exports = (ctx) => {
       daten.laeufe = beendet.liste
       if (beendet.anzahl) console.log(`Newsletter: ${beendet.anzahl} laufende Automationen beendet (abgeschaltet).`)
     }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Automation "${automation.name}" ${an ? 'eingeschaltet' : 'abgeschaltet'}.`)
     return { ok: true, text: an ? 'Eingeschaltet.' : 'Abgeschaltet, laufende Serien beendet.' }
   })
@@ -1406,7 +1405,7 @@ module.exports = (ctx) => {
     if (!automation) return { ok: false, text: 'Diese Automation gibt es nicht.' }
     daten.automationen = daten.automationen.filter((a) => a.id !== id)
     daten.laeufe = automationen.abbrechen(daten.laeufe, { grund: 'Automation gelöscht', automationIds: [id] }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     return { ok: true, text: 'Automation gelöscht.' }
   })
 
@@ -1509,7 +1508,7 @@ module.exports = (ctx) => {
         const d = datenLesen()
         d.laeufe = liste
         d.einstellungen = { ...d.einstellungen, ausloeser: { ...(d.einstellungen.ausloeser || {}), bestellerSeit: jetzt } }
-        ctx.datenSpeichern(d)
+        speicher.speichern(d)
       } else {
         console.warn(`Newsletter: Bestellungen konnten nicht geprueft werden: ${besteller.fehler}`)
       }
@@ -1561,7 +1560,7 @@ module.exports = (ctx) => {
         const d = datenLesen()
         d.laeufe = liste
         d.einstellungen = { ...d.einstellungen, ausloeser: { ...(d.einstellungen.ausloeser || {}), warenkorbSeit: jetzt } }
-        ctx.datenSpeichern(d)
+        speicher.speichern(d)
       } else {
         console.warn(`Newsletter: Warenkoerbe konnten nicht geholt werden: ${geholt.fehler}`)
       }
@@ -1588,7 +1587,7 @@ module.exports = (ctx) => {
       const d = datenLesen()
       d.laeufe = liste
       d.einstellungen = { ...d.einstellungen, ausloeser: { ...(d.einstellungen.ausloeser || {}), willkommenSeit: jetzt } }
-      ctx.datenSpeichern(d)
+      speicher.speichern(d)
     }
 
     // 4. Rückgewinnung: Käufer, deren letzte Bestellung im Fenster liegt. Einmal am Tag
@@ -1623,7 +1622,7 @@ module.exports = (ctx) => {
         d.laeufe = liste
         d.rueckgewinnung = { ...(d.rueckgewinnung || {}), gemerkt }
         d.einstellungen = { ...d.einstellungen, ausloeser: { ...(d.einstellungen.ausloeser || {}), rueckgewinnungAm: jetzt } }
-        ctx.datenSpeichern(d)
+        speicher.speichern(d)
       } else {
         console.warn(`Newsletter: Kaeufer fuer die Rueckgewinnung konnten nicht geholt werden: ${geholt.fehler}`)
       }
@@ -1662,7 +1661,7 @@ module.exports = (ctx) => {
     const fe = ergebnisseVon(frisch)
     const aufgenommen = ergebnisse.bestellungenAufnehmen(fe.bestellungen, geholt.bestellungen, { jetzt })
     frisch.ergebnisse = { ...fe, bestellungen: aufgenommen.liste, geholtAm: jetzt }
-    ctx.datenSpeichern(frisch)
+    speicher.speichern(frisch)
     if (aufgenommen.aufgenommen || aufgenommen.entfernt) {
       console.log(`Newsletter: Ergebnisse - ${aufgenommen.aufgenommen} Bestellung(en) aus Mails neu, ${aufgenommen.entfernt} storniert.`)
     }
@@ -1782,7 +1781,7 @@ module.exports = (ctx) => {
       const d = datenLesen()
       d.warteschlange = ergebnis.liste
       d.laeufe = automationen.schrittGemacht(d.laeufe, lauf.id, automation.schritte, { jetzt })
-      ctx.datenSpeichern(d)
+      speicher.speichern(d)
       if (ergebnis.eingereiht) {
         eingereiht++
         // Merken, zu welchem Schritt dieser Kurzname gehört — auch nach einer Umbenennung
@@ -1832,7 +1831,7 @@ module.exports = (ctx) => {
       ...daten.einstellungen,
       abmeldungen: { ...bisher, ...geprueft.wert }
     }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Abmeldungen per Mail ${geprueft.wert.aktiv ? 'eingeschaltet' : 'ausgeschaltet'} (Ordner ${geprueft.wert.ordner}).`)
     return { ok: true }
   })
@@ -1876,6 +1875,9 @@ module.exports = (ctx) => {
 
     let markiert = { ok: true, markiert: 0 }
     if (erledigt.length) {
+      // Erst wenn die Sperren dauerhaft liegen, die Mails als gelesen markieren: sonst kämen sie nach einem Absturz
+      // nicht wieder, und die Abmeldung wäre verloren
+      await speicher.festschreiben()
       markiert = await imap.alsGelesenMarkieren({ zugang: z, passwort, einstellungen, uids: erledigt })
       if (!markiert.ok) console.warn(`Newsletter: Abmeldungen konnten nicht als gelesen markiert werden: ${markiert.fehler}`)
     }
@@ -1895,7 +1897,7 @@ module.exports = (ctx) => {
       ...frisch.einstellungen,
       abmeldungen: { ...abmeldeEinstellungen(frisch), letzterLauf: Date.now(), letzterText: text }
     }
-    ctx.datenSpeichern(frisch)
+    speicher.speichern(frisch)
 
     if (geholt.abmeldungen.length) console.log(`Newsletter: Abmeldungen per Mail — ${text}`)
     return { ok: true, text, gesperrt, unbekannt, gefunden: geholt.abmeldungen.length }
@@ -1945,7 +1947,7 @@ module.exports = (ctx) => {
     const daten = datenLesen()
     const bisher = daten.einstellungen.ruecklaeufer || {}
     daten.einstellungen = { ...daten.einstellungen, ruecklaeufer: { ...bisher, ...geprueft.wert } }
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Rueckläufer per Mail ${geprueft.wert.aktiv ? 'eingeschaltet' : 'ausgeschaltet'} (Ordner ${geprueft.wert.ordner}).`)
     return { ok: true }
   })
@@ -1991,6 +1993,11 @@ module.exports = (ctx) => {
     const unlesbar = alle.filter((e) => e.art === 'unbekannt').length
     frisch.kontakte = angewandt.liste
     frisch.ruecklaeufer = ruecklaeufer.ereignisseMerken(frisch.ruecklaeufer, angewandt.ereignisse)
+    // Sperren sofort speichern und festschreiben, bevor die Mails als gelesen markiert werden. Vorher wurde erst danach
+    // gespeichert: ein Absturz dazwischen verlor die Sperren, und was während des Markierens geschrieben wurde
+    // (etwa von der Warteschlange), überschrieb der alte Stand.
+    speicher.speichern(frisch)
+    await speicher.festschreiben()
 
     let markiert = { ok: true }
     const uids = geholt.mails.map((m) => m.uid)
@@ -2013,11 +2020,12 @@ module.exports = (ctx) => {
           .join(', ')
       : 'Keine neuen Rückläufer.'
 
-    frisch.einstellungen = {
-      ...frisch.einstellungen,
-      ruecklaeufer: { ...(frisch.einstellungen.ruecklaeufer || {}), letzterLauf: Date.now(), letzterText: text }
+    const danach = datenLesen()
+    danach.einstellungen = {
+      ...danach.einstellungen,
+      ruecklaeufer: { ...(danach.einstellungen.ruecklaeufer || {}), letzterLauf: Date.now(), letzterText: text }
     }
-    ctx.datenSpeichern(frisch)
+    speicher.speichern(danach)
     if (geholt.mails.length) console.log(`Newsletter: Rückläufer per Mail — ${text}`)
     return { ok: true, text, gesperrt: angewandt.gesperrt, gezaehlt: angewandt.gezaehlt, unbekannt: angewandt.unbekannt, gelesen: geholt.mails.length }
   }
@@ -2096,7 +2104,7 @@ module.exports = (ctx) => {
     if (!kampagne) return { ok: false, text: 'Diese Kampagne gibt es nicht.' }
     if (kampagne.zustand !== 'laeuft') return { ok: false, text: 'Anhalten geht nur bei einer laufenden Kampagne.' }
     daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, id, { zustand: 'pausiert', pausiertAm: Date.now(), pausiertVon: 'hand', pausiertGrund: 'von Hand angehalten' }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     console.log(`Newsletter: Kampagne "${kampagne.name}" angehalten.`)
     return { ok: true, text: 'Angehalten. Die restlichen Mails warten, bis du fortsetzt.' }
   })
@@ -2127,7 +2135,8 @@ module.exports = (ctx) => {
       pausiertVon: null,
       eingereiht: (kampagne.eingereiht || 0) + eingereiht.eingereiht
     }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
+    speicher.festschreiben()
     console.log(`Newsletter: Kampagne "${kampagne.name}" fortgesetzt, ${eingereiht.eingereiht} neu eingereiht.`)
     return { ok: true, text: `Fortgesetzt.${eingereiht.eingereiht ? ` ${eingereiht.eingereiht} Mails neu eingereiht, die inzwischen verfallen waren.` : ''}` }
   })
@@ -2304,7 +2313,7 @@ module.exports = (ctx) => {
     if (!r.ok) return null
     const frisch = datenLesen()
     frisch.shopify = { ...frisch.shopify, primaerDomain: r.host }
-    ctx.datenSpeichern(frisch)
+    speicher.speichern(frisch)
     console.log(`Newsletter: oeffentliche Shop-Adresse ist ${r.host}.`)
     return r.host
   }
@@ -2596,7 +2605,7 @@ module.exports = (ctx) => {
       if (a.htmlRahmen !== undefined) k.htmlRahmen = a.htmlRahmen
       k.erstelltVon = von
       daten.kampagnen = [...daten.kampagnen, k]
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       console.log(`Newsletter: ${von} hat einen Kampagnen-Entwurf angelegt.`)
       return { ok: true, text: `Entwurf „${k.name}“ angelegt (ID ${k.id}). Ist er fertig: kampagne_zur_freigabe.`, daten: kampagneGanz(datenLesen(), k) }
     }
@@ -2610,7 +2619,7 @@ module.exports = (ctx) => {
       const aenderung = { zustand: 'entwurf', freigabe: null }
       for (const feld of ['name', 'betreff', 'vorschauText', 'html', 'htmlRahmen']) if (a[feld] !== undefined) aenderung[feld] = a[feld]
       daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, k.id, aenderung).liste
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       const zurueck = k.zustand === 'freigabe' ? ' Die offene Freigabe ist damit zurückgezogen — nach dem Ändern erneut zur Freigabe geben.' : ''
       return { ok: true, text: `Geändert.${zurueck}`, daten: kampagneGanz(datenLesen(), kampagneHolen(datenLesen(), k.id)) }
     }
@@ -2649,7 +2658,7 @@ module.exports = (ctx) => {
         zustand: 'freigabe',
         freigabe: { angefragtAm: Date.now(), gewuenschtAm: termin.wert, von, testmail: { ok: Boolean(versand.ok), text: String(versand.text || '').slice(0, 200) } }
       }).liste
-      ctx.datenSpeichern(frisch)
+      speicher.speichern(frisch)
       console.log(`Newsletter: ${von} hat eine Kampagne zur Freigabe gegeben (Testmail ${versand.ok ? 'raus' : 'nicht raus'}).`)
       return {
         ok: true,
@@ -2693,7 +2702,7 @@ module.exports = (ctx) => {
         return neu
       })
       daten.automationen = daten.automationen.map((y) => (y.id === x.id ? { ...y, schritte, geaendertAm: Date.now() } : y))
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: `Schritt ${nummer + 1} geändert. Zur Probe an den Inhaber: automation_zur_probe. Einschalten tut der Inhaber.`, daten: automationGanz(datenLesen(), automationHolen(datenLesen(), x.id)) }
     }
 
@@ -2722,7 +2731,7 @@ module.exports = (ctx) => {
       const neu = kampagnen.neueKampagne({ name: (a.name || `Kopie von ${k.name}`).slice(0, 80), marke })
       Object.assign(neu, { betreff: k.betreff || '', vorschauText: k.vorschauText || '', html: kampagnen.htmlVon(k, { marke }), htmlRahmen: k.htmlRahmen !== false, erstelltVon: von })
       daten.kampagnen = [...daten.kampagnen, neu]
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: `Kopie „${neu.name}“ als Entwurf angelegt (ID ${neu.id}).`, daten: kampagneGanz(datenLesen(), neu) }
     }
 
@@ -2731,7 +2740,7 @@ module.exports = (ctx) => {
       if (!k) return { ok: false, text: 'Diese Kampagne gibt es nicht.' }
       if (!bots.BOT_AENDERBAR.includes(k.zustand)) return { ok: false, text: `Die Kampagne ist ${k.zustand}. Löschen kannst du nur Entwürfe; Geplantes und Verschicktes bleibt, das entscheidet der Inhaber.` }
       daten.kampagnen = daten.kampagnen.filter((x) => x.id !== k.id)
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       console.log(`Newsletter: ${von} hat einen Kampagnen-Entwurf geloescht.`)
       return { ok: true, text: `Entwurf „${k.name}“ gelöscht.` }
     }
@@ -2748,7 +2757,7 @@ module.exports = (ctx) => {
       if (a.name) {
         const frisch = datenLesen()
         frisch.automationen = frisch.automationen.map((x) => (x.id === angelegt.id ? { ...x, name: a.name } : x))
-        ctx.datenSpeichern(frisch)
+        speicher.speichern(frisch)
       }
       console.log(`Newsletter: ${von} hat eine Automation angelegt (${art}).`)
       return { ok: true, text: `Automation angelegt (ID ${angelegt.id}), ausgeschaltet. Texte mit automation_schritt_aendern, Probe mit automation_zur_probe — einschalten tut der Inhaber.`, daten: automationGanz(datenLesen(), automationHolen(datenLesen(), angelegt.id)) }
@@ -2758,7 +2767,7 @@ module.exports = (ctx) => {
       const x = automationHolen(daten, a.id)
       if (!x) return { ok: false, text: 'Diese Automation gibt es nicht.' }
       if (a.name) daten.automationen = daten.automationen.map((y) => (y.id === x.id ? { ...y, name: a.name, geaendertAm: Date.now() } : y))
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: 'Automation geändert.', daten: automationGanz(datenLesen(), automationHolen(datenLesen(), x.id)) }
     }
 
@@ -2776,7 +2785,7 @@ module.exports = (ctx) => {
         htmlRahmen: a.htmlRahmen !== false
       }
       daten.automationen = daten.automationen.map((y) => (y.id === x.id ? { ...y, schritte: [...(y.schritte || []), schritt], geaendertAm: Date.now() } : y))
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: `Schritt ${(x.schritte || []).length + 1} angelegt.`, daten: automationGanz(datenLesen(), automationHolen(datenLesen(), x.id)) }
     }
 
@@ -2789,7 +2798,7 @@ module.exports = (ctx) => {
       if (!x.schritte?.[nummer]) return { ok: false, text: `Schritt ${nummer + 1} gibt es nicht.` }
       if (x.schritte.length <= 1) return { ok: false, text: 'Eine Automation braucht mindestens einen Schritt. Lieber den Text ändern oder die ganze Automation löschen.' }
       daten.automationen = daten.automationen.map((y) => (y.id === x.id ? { ...y, schritte: y.schritte.filter((_, i) => i !== nummer), geaendertAm: Date.now() } : y))
-      ctx.datenSpeichern(daten)
+      speicher.speichern(daten)
       return { ok: true, text: `Schritt ${nummer + 1} gelöscht.`, daten: automationGanz(datenLesen(), automationHolen(datenLesen(), x.id)) }
     }
 
@@ -2983,7 +2992,7 @@ module.exports = (ctx) => {
     if (!k) return { ok: false, text: 'Diese Kampagne gibt es nicht mehr.' }
     if (!bots.BOT_AENDERBAR.includes(k.zustand)) return { ok: false, text: `Die Kampagne ist ${k.zustand}. Ändern kann sie jetzt nur der Inhaber in Vendo.` }
     daten.kampagnen = kampagnen.kampagneAendern(daten.kampagnen, k.id, { html, zustand: 'entwurf', freigabe: null }).liste
-    ctx.datenSpeichern(daten)
+    speicher.speichern(daten)
     aenderungMelden('datei', eintrag.id, DATEI_VON)
     console.log(`Newsletter: Aenderung aus ${eintrag.datei} uebernommen.`)
     return { ok: true }

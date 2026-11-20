@@ -12,7 +12,10 @@ Dateien, ihre Aufrufstellen und Tests. Liegt eine lokale `STAND.md` daneben, ste
 - **Kein Electron-Aufruf außerhalb von `tresor.js`.** Der Kern soll später ohne Electron laufen können.
 - In Vendo ist das Repository per Verknüpfung als `plugins/newsletter` eingebunden. `__dirname` zeigt dann auf dieses
   Repository; Vendos `daten/` kommt deshalb aus `ctx.ordner`, nie aus `__dirname`.
-- Plugin-Daten nur über `ctx.datenLaden`/`ctx.datenSpeichern`. Zeitgeber genau einmal starten (Schutz im Modul-Scope):
+- Plugin-Daten nur über `speicher.js` (`lesen`, `speichern`, `feldSpeichern`, `festschreiben`); kein anderes Modul
+  und nicht die Oberfläche fasst `ctx.datenLaden`, `ctx.datenSpeichern` oder `ctx.daten` an (ein Test prüft das).
+  Vor jedem Schritt nach außen, der sich nicht zurücknehmen lässt (SMTP, Mails als gelesen markieren), `await
+  speicher.festschreiben()`. Zeitgeber genau einmal starten (Schutz im Modul-Scope):
   Vendo ruft die Aufbaufunktion bei jedem Laden der Plugin-Liste erneut auf.
 
 ## Unverrückbar

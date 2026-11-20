@@ -1,25 +1,11 @@
 // Newsletter-Plugin: Kampagnen und Automationen über das eigene IONOS-Postfach.
-// Daten in daten/plugins/newsletter.json, Stand und Bauplan siehe README.md im Plugin-Ordner.
+// Daten liest und schreibt nur der Hintergrundteil (haupt.js über speicher.js); die Oberfläche fragt ihn über ctx.aufrufen.
 //
 // Stand: Postfach, Testmail, Protokoll, Drossel, Warteschlange, Kontakte aus Shopify und
 // per CSV, Kampagnen und Vorlagen als Mail-HTML mit Entwurf von Luzzy, Automationen.
 //
 // Passwort und Shopify-Token werden nur zum Speichern an haupt.js übergeben und kommen von
 // dort nie zurück.
-
-const LEER = {
-  zugang: {},
-  shopify: {},
-  marke: {},
-  einstellungen: {},
-  drossel: {},
-  warteschlange: [],
-  kontakte: [],
-  vorlagen: [],
-  kampagnen: [],
-  automationen: [],
-  laeufe: []
-}
 
 const BEREICHE = [
   { id: 'uebersicht', name: 'Übersicht' },
@@ -42,7 +28,9 @@ const ZUSTAND_TEXT = { entwurf: 'Entwurf', freigabe: 'wartet auf Freigabe', gepl
 
 export async function starten(ctx) {
   const m = ctx.maskieren
-  let daten = { ...LEER }
+  // Zahlen für die Übersicht. Die Plugin-Daten selbst lädt die Oberfläche nicht (Schritt N1 des PostgreSQL-Umbaus):
+  // alles läuft über die Funktionen des Hintergrundteils
+  let zahlen = {}
   let zugang = null
   let drossel = null
   let schlange = null
@@ -118,6 +106,7 @@ export async function starten(ctx) {
     }
   }
 
+  const zahlenHolen = async () => (zahlen = (await stillHolen('uebersichtLesen')) || zahlen)
   const zugangHolen = async () => (zugang = await stillHolen('zugangLesen'))
   const drosselHolen = async () => (drossel = await stillHolen('drosselLesen'))
   const schlangeHolen = async () => (schlange = await stillHolen('warteschlangeLesen'))
@@ -137,11 +126,7 @@ export async function starten(ctx) {
   const protokollHolen = async () => (protokoll = (await stillHolen('protokollLesen', { anzahl: 50 })) || [])
 
   async function laden() {
-    const d = await ctx.daten.laden()
-    const fehlt = Object.keys(LEER).filter((k) => d[k] === undefined)
-    daten = { ...LEER, ...d }
-    if (fehlt.length) await ctx.daten.speichern(daten)
-    await Promise.all([zugangHolen(), drosselHolen(), schlangeHolen()])
+    await Promise.all([zahlenHolen(), zugangHolen(), drosselHolen(), schlangeHolen()])
     if (bereich === 'uebersicht') await Promise.all([rennerHolen(), zustellHolen()])
     if (bereich === 'kontakte') await Promise.all([shopifyHolen(), kontakteHolen(), abmeldungenHolen(), rueckHolen()])
     if (bereich === 'kampagnen') await Promise.all([kampagnenHolen(), markeHolen(), vorlagenHolen(), kErgebnisseHolen(), zustellHolen()])
@@ -181,6 +166,7 @@ export async function starten(ctx) {
   const stand = (text, klasse = '') => `<span class="nl-stand ${klasse}" title="${m(text)}">${m(text)}</span>`
   // Was nicht geladen werden konnte, mit dem Bereich in Worten
   const LADE_NAMEN = {
+    uebersichtLesen: 'Übersicht',
     zugangLesen: 'Zugang',
     drosselLesen: 'Drossel',
     warteschlangeLesen: 'Warteschlange',
@@ -277,15 +263,15 @@ export async function starten(ctx) {
   // allein darunter rutscht. Die Empfängerzahl steht im Reiter „Kontakte“, dort mit den
   // Zahlen daneben, die sie erklären (gesperrt, ohne Nachweis, gesamt).
   function uebersicht() {
-    const aktiv = daten.automationen.filter((a) => a.aktiv).length
-    const laufen = daten.kampagnen.filter((k) => k.zustand === 'laeuft' || k.zustand === 'geplant').length
-    const freigaben = daten.kampagnen.filter((k) => k.zustand === 'freigabe').length
+    const aktiv = Number(zahlen.automationenAktiv) || 0
+    const laufen = Number(zahlen.geplantOderLaufend) || 0
+    const freigaben = Number(zahlen.freigaben) || 0
     const p = postfachStand()
     return `
       <div class="nl-kacheln">
         ${kachel(
           'Kampagnen',
-          zahl(daten.kampagnen),
+          zahl(zahlen.kampagnen),
           // Wartet etwas auf Freigabe, ist das die wichtigere Zeile — eine zweite wäre
           // eine zweite Zeile, und dann wären die Kacheln wieder ungleich hoch.
           freigaben ? `${freigaben} warten auf Freigabe` : `${laufen} geplant oder laufend`,
@@ -2546,7 +2532,7 @@ export async function starten(ctx) {
     botStandBekannt = s.stand
     const zuletzt = s.zuletzt || []
     await Promise.all([kampagnenHolen(), vorlagenHolen(), autosHolen()])
-    daten = { ...LEER, ...(await ctx.daten.laden()) }
+    await zahlenHolen()
 
     const offen = offenerEditor()
     const offenId = offen === 'kampagne' ? gewaehlt : offen === 'vorlage' ? gewaehlteVorlage : null
