@@ -6,8 +6,9 @@
 // setzt die Platzhalter. Eine neue Datei im Ordner ist ein neues Muster, ohne Codeänderung.
 //
 // `vorlagen/` enthält neutrale Beispiele (öffentlich im Repository). Eigene Muster im Stil
-// der eigenen Marke gehören nach `vorlagen-eigene/`: der Ordner ist von Git ausgeschlossen,
-// und eine Datei dort ersetzt das gleichnamige Muster aus `vorlagen/` oder kommt dazu.
+// der eigenen Marke liegen außerhalb des Repositorys in Vendos Datenordner
+// (`daten/plugins/newsletter/vorlagen-eigene/`, setzt haupt.js beim Start); eine Datei dort
+// ersetzt das gleichnamige Muster aus `vorlagen/` oder kommt dazu.
 //
 // In Vendo erscheinen die Muster direkt als Vorlagen, nicht als zweite Liste daneben. Eine
 // eigene Kopie in den Plugin-Daten entsteht erst, wenn jemand eine davon wirklich ändert
@@ -26,9 +27,12 @@ const path = require('path')
 const { STANDARD_FARBEN, SCHRIFT } = require('./bausteine.js')
 
 const ORDNER = path.join(__dirname, 'vorlagen')
-// Eigene Muster (lokal, nicht in Git). Tests lenken das über VENDO_NEWSLETTER_EIGENE_VORLAGEN um.
-const EIGENE = () => process.env.VENDO_NEWSLETTER_EIGENE_VORLAGEN || path.join(__dirname, 'vorlagen-eigene')
-const ordnerListe = () => [ORDNER, EIGENE()]
+// Eigene Muster: nie im Repository, sondern in Vendos Datenordner. haupt.js setzt den Ordner aus ctx.ordner;
+// Tests lenken ihn über VENDO_NEWSLETTER_EIGENE_VORLAGEN um. Ohne beides gibt es nur die Beispiele.
+let eigenerOrdner = null
+const eigenenOrdnerSetzen = (ordner) => { eigenerOrdner = ordner || null }
+const EIGENE = () => process.env.VENDO_NEWSLETTER_EIGENE_VORLAGEN || eigenerOrdner
+const ordnerListe = () => [ORDNER, EIGENE()].filter(Boolean)
 
 // Die Farben, die in den Dateien stehen: Anthrazit und Gold, Beige als heller Kontrast.
 // Sie sind zugleich die Marken, nach denen ersetzt wird: stehen in den Markenangaben
@@ -165,4 +169,4 @@ function musterHtml(id, angaben = {}) {
 // Die Liste für die Oberfläche und für den Bot — ohne das rohe HTML.
 const musterListe = () => gelesen().map(({ id, name, art, beschreibung }) => ({ id, name, art, beschreibung }))
 
-module.exports = { musterListe, musterHtml, ersetzen, farbenAus, kopfLesen, kommentareWeg, ORDNER, EIGENE, DUNKEL, BEISPIEL, SHOP }
+module.exports = { musterListe, musterHtml, ersetzen, farbenAus, kopfLesen, kommentareWeg, ORDNER, EIGENE, eigenenOrdnerSetzen, DUNKEL, BEISPIEL, SHOP }

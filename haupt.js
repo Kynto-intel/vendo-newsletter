@@ -88,6 +88,8 @@ module.exports = (ctx) => {
   // zeigt __dirname auf das Ziel, und daten/ wäre falsch abgeleitet. Tests setzen die Ordner selbst.
   const vendoDaten = path.join(ctx.ordner || __dirname, '..', '..', 'daten', 'plugins', 'newsletter')
   const protokollOrdner = ctx.protokollOrdner || vendoDaten
+  // Eigene Muster im Stil der eigenen Marke: in Vendos Datenordner, nie im Repository
+  muster.eigenenOrdnerSetzen(path.join(vendoDaten, 'vorlagen-eigene'))
   // Alles Lesen und Schreiben der Plugin-Daten läuft über speicher.js (Schritt N1 des PostgreSQL-Umbaus). Das Journal
   // braucht nur der Tabellen-Speicher (Schritt N3); Tests setzen `ctx.journalDatei` selbst.
   const speicher = speicherMachen(ctx, {

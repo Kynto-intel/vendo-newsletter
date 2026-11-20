@@ -32,7 +32,7 @@ Dateien, ihre Aufrufstellen und Tests. Liegt eine lokale `STAND.md` daneben, ste
   oder Commits. Ohne verfügbare Verschlüsselung wird nichts gespeichert.
 - Nie echte Kontakte, Adressen, Bestellungen oder Zugangsdaten in Code, Tests, Fixtures, Issues oder Commits.
 - Keine Logos, Markennamen, Shop-Adressen oder Personennamen des Betreibers im Repository. Muster unter `vorlagen/`
-  bleiben neutral (`beispiel-shop.de`); eigene Muster liegen lokal in `vorlagen-eigene/`. Kein fest eingetragener
+  bleiben neutral (`beispiel-shop.de`); eigene Muster liegen in Vendos `daten/plugins/newsletter/vorlagen-eigene/`. Kein fest eingetragener
   Hermes-Profilname: den gibt Vendo über `VENDO_HERMES_PROFIL` vor.
 - Hermes-Programmcode wird nicht verändert.
 - Keine neuen Abhängigkeiten ohne Begründung; keinen fremden Code übernehmen, ohne Herkunft und Lizenz zu vermerken.

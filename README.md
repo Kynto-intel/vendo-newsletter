@@ -57,9 +57,9 @@ geht nur, wenn keine Kampagne läuft oder angehalten ist und die Warteschlange l
 (`daten/plugins/newsletter/sicherung-vor-tabellen-….json`); nach dem Kopieren wird jeder Eintrag verglichen, und nur bei
 voller Übereinstimmung wird umgeschaltet, sonst bleibt alles beim alten Speicher. Die Protokolldateien bleiben liegen.
 
-Die Muster unter `vorlagen/` sind neutrale Beispiele. Eigene Muster im Stil der eigenen Marke gehören in den Ordner
-`vorlagen-eigene/` daneben (von Git ausgeschlossen): Eine Datei dort ersetzt das gleichnamige Beispiel oder kommt als
-weiteres Muster dazu.
+Die Muster unter `vorlagen/` sind neutrale Beispiele. Eigene Muster im Stil der eigenen Marke gehören in Vendos
+Datenordner nach `daten/plugins/newsletter/vorlagen-eigene/`, also nie ins Repository: Eine Datei dort ersetzt das
+gleichnamige Beispiel oder kommt als weiteres Muster dazu.
 
 ## Grenzen
 

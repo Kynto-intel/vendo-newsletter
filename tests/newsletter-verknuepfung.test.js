@@ -35,4 +35,7 @@ test('Protokoll wird in Vendos daten/ gelesen, abgeleitet aus ctx.ordner', (t) =
   const liste = fn.protokollLesen({ anzahl: 10 })
   assert.equal(liste.length, 1)
   assert.equal(liste[0].betreff, 'Probe')
+  // Eigene Muster kommen ebenfalls aus Vendos daten/, nie aus dem Repository
+  const muster = require('../muster.js')
+  if (!process.env.VENDO_NEWSLETTER_EIGENE_VORLAGEN) assert.equal(muster.EIGENE(), path.join(daten, 'vorlagen-eigene'))
 })
