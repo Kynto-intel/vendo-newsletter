@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    # Windows wie in Vendo (Pfade, Zeilenenden)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: npm test
+        shell: bash
+        run: npm test 2>&1 | tee test.log; exit ${PIPESTATUS[0]}
+      # Fehlschläge als Hinweise am Lauf anzeigen (auch ohne Anmeldung sichtbar)
+      - name: Fehlschläge zusammenfassen
+        if: failure()
+        shell: bash
+        run: grep -E "^not ok|^# Subtest|✖|AssertionError|Error:|expected|actual|\+ |\- " test.log | head -60 | sed 's/^/::error::/' || true

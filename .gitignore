@@ -1,0 +1,10 @@
+# Private Arbeitsdateien: nie veröffentlichen
+STAND.md
+REVIEW.md
+vorlagen-eigene/
+test-results/
+*.result.md
+
+# Erzeugte oder lokale Daten
+daten/
+node_modules/
