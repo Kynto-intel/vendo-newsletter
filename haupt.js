@@ -63,7 +63,6 @@ const bots = require('./bots.js')
 const entwurfsdateien = require('./entwurfsdateien.js')
 const { mailAusHtml, beispielHtml, hatInhalt, fremdePlatzhalter, felderLesen, unveraendertAusVorlage, aufbauAehnlichkeit, starreSpalten, hausregelVerstoesse, produkteOhneText, PRODUKTTEXT_MIN, utmAnhaengen, MAX_HTML } = require('./html-mail.js')
 const shoplinks = require('./shoplinks.js')
-const { protokollSchreiben, protokollLesen } = require('./protokoll.js')
 const { speicherMachen } = require('./speicher.js')
 
 const TAKT = 15000 // so oft schaut der Hintergrundteil in die Warteschlange
@@ -87,19 +86,25 @@ module.exports = (ctx) => {
   // zeigt __dirname auf das Ziel, und daten/ wäre falsch abgeleitet. Tests setzen die Ordner selbst.
   const vendoDaten = path.join(ctx.ordner || __dirname, '..', '..', 'daten', 'plugins', 'newsletter')
   const protokollOrdner = ctx.protokollOrdner || vendoDaten
+  // Alles Lesen und Schreiben der Plugin-Daten läuft über speicher.js (Schritt N1 des PostgreSQL-Umbaus). Das Journal
+  // braucht nur der Tabellen-Speicher (Schritt N3); Tests setzen `ctx.journalDatei` selbst.
+  const speicher = speicherMachen(ctx, {
+    protokollOrdner,
+    journalDatei: ctx.journalDatei !== undefined ? ctx.journalDatei : path.join(vendoDaten, 'tabellen-journal.json')
+  })
+  const datenLesen = speicher.lesen
+
   // Alles, was die Ansicht aufrufen kann, ist auch für die Bot-Aufträge greifbar — so gibt
-  // es Abgleich, Löschen und Anlegen nur einmal, mit denselben Prüfungen.
+  // es Abgleich, Löschen und Anlegen nur einmal, mit denselben Prüfungen. Lädt der Speicher
+  // noch (Tabellen, Schritt N3), warten die Aufrufe darauf; sonst laufen sie wie bisher sofort.
   const eigene = new Map()
   const bereitstellen = (name, fn) => {
-    eigene.set(name, fn)
-    ctx.bereitstellen(name, fn)
+    const wartend = (...args) => (speicher.istBereit() ? fn(...args) : speicher.bereit.then(() => fn(...args)))
+    eigene.set(name, wartend)
+    ctx.bereitstellen(name, wartend)
   }
 
   const tresor = tresorMachen()
-
-  // Alles Lesen und Schreiben der Plugin-Daten läuft über speicher.js (Schritt N1 des PostgreSQL-Umbaus)
-  const speicher = speicherMachen(ctx)
-  const datenLesen = speicher.lesen
 
   // Läuft oder ist angehalten: Mails dieser Kampagne stehen noch in der Warteschlange
   const unterwegs = (k) => k?.zustand === 'laeuft' || k?.zustand === 'pausiert'
@@ -331,7 +336,7 @@ module.exports = (ctx) => {
 
     if (ergebnis.ok) {
       feldSpeichern('drossel', drossel.gesendetMerken())
-      protokollSchreiben({ an: gebaut.mail.to, betreff: gebaut.mail.subject, art, kampagneId, ok: true }, protokollOrdner)
+      speicher.protokollSchreiben({ an: gebaut.mail.to, betreff: gebaut.mail.subject, art, kampagneId, ok: true })
       console.log(`Newsletter: Mail an ${kuerzen(gebaut.mail.to)} verschickt (${art}).`)
       return { ok: true, text: ergebnis.text }
     }
@@ -341,10 +346,7 @@ module.exports = (ctx) => {
       feldSpeichern('drossel', drossel.pausieren())
       console.warn('Newsletter: Postfach meldet ein Limit, der Versand pausiert.')
     }
-    protokollSchreiben(
-      { an: gebaut.mail.to, betreff: gebaut.mail.subject, art, kampagneId, ok: false, fehler: ergebnis.fehler?.code || ergebnis.fehler?.message },
-      protokollOrdner
-    )
+    speicher.protokollSchreiben({ an: gebaut.mail.to, betreff: gebaut.mail.subject, art, kampagneId, ok: false, fehler: ergebnis.fehler?.code || ergebnis.fehler?.message })
     console.warn(`Newsletter: Mail an ${kuerzen(gebaut.mail.to)} fehlgeschlagen: ${ergebnis.fehler?.code || 'ohne Code'}`)
     return { ok: false, text: ergebnis.text, fehler: ergebnis.fehler }
   }
@@ -1680,7 +1682,7 @@ module.exports = (ctx) => {
     const daten = datenLesen()
     const e = ergebnisseVon(daten)
     // `ctx.protokollOrdner` gibt es nur in Tests: dort nie das echte Protokoll lesen
-    const protokoll = protokollLesen({ anzahl: 50000, ordner: protokollOrdner })
+    const protokoll = speicher.protokollLesen({ anzahl: 50000 })
     const bewertet = zustellungBewerten(daten, protokoll)
     return {
       geholtAm: e.geholtAm || null,
@@ -1702,7 +1704,7 @@ module.exports = (ctx) => {
     const daten = datenLesen()
     const e = ergebnisseVon(daten)
     // `ctx.protokollOrdner` gibt es nur in Tests: dort nie das echte Protokoll lesen
-    const protokoll = protokollLesen({ anzahl: 50000, ordner: protokollOrdner })
+    const protokoll = speicher.protokollLesen({ anzahl: 50000 })
     return {
       geholtAm: e.geholtAm || null,
       zeilen: ergebnisse.automationenZeilen({
@@ -2036,7 +2038,7 @@ module.exports = (ctx) => {
   // Je Kampagne: tote Adressen, Ablehnungen, Beschwerden, Abmeldungen im Verhältnis zu den
   // verschickten Mails, als Ampel. Bei Rot hält Vendo eine laufende Kampagne an; fortsetzen
   // kann nur der Inhaber, und danach hält Vendo dieselbe Kampagne nicht noch einmal an.
-  const protokollAlle = () => protokollLesen({ anzahl: 50000, ordner: protokollOrdner })
+  const protokollAlle = () => speicher.protokollLesen({ anzahl: 50000 })
 
   const zustellungBewerten = (daten, protokoll = protokollAlle(), { jetzt = Date.now() } = {}) => {
     const zahlen = zustellung.zaehlen({
@@ -2145,7 +2147,7 @@ module.exports = (ctx) => {
 
   bereitstellen('protokollLesen', (eingabe = {}) => {
     const anzahl = Math.min(Math.max(Number(eingabe.anzahl) || 50, 1), 500)
-    return protokollLesen({ anzahl, ordner: protokollOrdner })
+    return speicher.protokollLesen({ anzahl })
   })
 
   bereitstellen('textVorschau', (html) => textAusHtml(html))
@@ -2317,7 +2319,7 @@ module.exports = (ctx) => {
     console.log(`Newsletter: oeffentliche Shop-Adresse ist ${r.host}.`)
     return r.host
   }
-  setTimeout(() => shopAdresseSichern().catch(() => {}), 4000).unref?.()
+  setTimeout(() => speicher.bereit.then(() => shopAdresseSichern()).catch(() => {}), 4000).unref?.()
 
   // Ohne Netz: Adressen, die nicht zum Shop gehören
   const shopHinweise = (daten, html) => {
@@ -2902,7 +2904,7 @@ module.exports = (ctx) => {
   // Zahlen für die Auswertung — nie einzelne Kontakte oder Adressen
   const auswertungBauen = (daten) => {
     // `ctx.protokollOrdner` gibt es nur in Tests: dort nie das echte Protokoll lesen
-    const protokoll = protokollLesen({ anzahl: 50000, ordner: protokollOrdner })
+    const protokoll = speicher.protokollLesen({ anzahl: 50000 })
     const tag = 86400000
     const zaehlen = (liste, schluessel) =>
       liste.reduce((summe, x) => {
@@ -3053,7 +3055,7 @@ module.exports = (ctx) => {
     let arbeitet = false
     let letztesAufraeumen = 0
     setInterval(async () => {
-      if (arbeitet) return
+      if (arbeitet || !speicher.istBereit()) return
       arbeitet = true
       try {
         for (const eintrag of bots.eingangLesen(eingangOrdner)) {
@@ -3084,7 +3086,7 @@ module.exports = (ctx) => {
   // darauf in Vendo, und was der Inhaber in Vendo ändert, kurz darauf in der Datei.
   if (entwurfOrdner && !entwurfLaeuft) {
     entwurfLaeuft = true
-    setInterval(entwuerfeAbgleichen, 1000).unref?.()
+    setInterval(() => { if (speicher.istBereit()) entwuerfeAbgleichen() }, 1000).unref?.()
   }
 
   // ── Takt ──
@@ -3097,7 +3099,7 @@ module.exports = (ctx) => {
     let letzteAusloeser = 0
 
     setInterval(async () => {
-      if (beschaeftigt) return // ein Versand kann länger dauern als der Takt
+      if (beschaeftigt || !speicher.istBereit()) return // ein Versand kann länger dauern als der Takt; Speicher lädt noch
       beschaeftigt = true
       try {
         kampagnenPflegen()

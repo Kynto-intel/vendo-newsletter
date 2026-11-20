@@ -50,6 +50,11 @@ Danach Vendo neu starten; der Bereich „Newsletter“ erscheint in der Seitenle
 Warteschlange) speichert Vendo über die Plugin-API; Versandprotokoll, Bot-Aufträge und Entwurfsdateien liegen unter
 Vendos `daten/plugins/newsletter/`. Nichts davon gehört in dieses Repository.
 
+Für größere Bestände ist ein zweiter Speicher eingebaut: eigene Tabellen im Schema `newsletter` in Vendos PostgreSQL
+(`db.js`, `speicher-tabellen.js`), mit dem Versandprotokoll als Tabelle und ohne die Größengrenze der Plugin-Daten. Er
+wird erst genutzt, wenn die Plugin-Daten die Markierung `_speicher: { modus: 'tabellen' }` tragen. Ein Werkzeug, das die
+vorhandenen Daten in die Tabellen übernimmt und diese Markierung setzt, gibt es noch nicht.
+
 Die Muster unter `vorlagen/` sind neutrale Beispiele. Eigene Muster im Stil der eigenen Marke gehören in den Ordner
 `vorlagen-eigene/` daneben (von Git ausgeschlossen): Eine Datei dort ersetzt das gleichnamige Beispiel oder kommt als
 weiteres Muster dazu.

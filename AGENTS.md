@@ -15,7 +15,11 @@ Dateien, ihre Aufrufstellen und Tests. Liegt eine lokale `STAND.md` daneben, ste
 - Plugin-Daten nur über `speicher.js` (`lesen`, `speichern`, `feldSpeichern`, `festschreiben`); kein anderes Modul
   und nicht die Oberfläche fasst `ctx.datenLaden`, `ctx.datenSpeichern` oder `ctx.daten` an (ein Test prüft das).
   Vor jedem Schritt nach außen, der sich nicht zurücknehmen lässt (SMTP, Mails als gelesen markieren), `await
-  speicher.festschreiben()`. Zeitgeber genau einmal starten (Schutz im Modul-Scope):
+  speicher.festschreiben()`.
+- Zwei Speicher, eine Schnittstelle: Standard ist Vendos Plugin-Speicher; die eigenen Tabellen (`db.js`,
+  `speicher-tabellen.js`) gelten nur mit der Markierung `_speicher: { modus: 'tabellen' }`. Neue Felder brauchen keine
+  Migration (jede Zeile trägt das ganze Objekt in `daten`); neue Spalten oder Tabellen nur als neue Migration in `db.js`,
+  nie eine vorhandene ändern. Datenbank-Tests nur gegen die Test-Datenbank (`tests/hilfen/test-datenbank.cjs`). Zeitgeber genau einmal starten (Schutz im Modul-Scope):
   Vendo ruft die Aufbaufunktion bei jedem Laden der Plugin-Liste erneut auf.
 
 ## Unverrückbar

@@ -27,3 +27,30 @@ jobs:
         if: failure()
         shell: bash
         run: grep -E "^not ok|^# Subtest|✖|AssertionError|Error:|expected|actual|\+ |\- " test.log | head -60 | sed 's/^/::error::/' || true
+
+  datenbank:
+    # Die Datenbank-Tests (Schema, Tabellen-Speicher) gegen echtes PostgreSQL. Dienst-Container gibt es nur unter Linux;
+    # VENDO_DB_PFLICHT macht eine fehlende Datenbank zum Fehler statt zum Überspringen.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: nurtest
+          POSTGRES_DB: vendo_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      VENDO_DB_URL: postgres://postgres:nurtest@127.0.0.1:55432/vendo_test
+      VENDO_DB_PFLICHT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Datenbank-Tests
+        run: node --test tests/newsletter-db.test.js tests/newsletter-speicher-tabellen.test.js

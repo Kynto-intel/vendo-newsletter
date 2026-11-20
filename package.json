@@ -25,5 +25,8 @@
     "README.md",
     "LIZENZ.md",
     "LICENSE"
-  ]
+  ],
+  "devDependencies": {
+    "pg": "^8.23.1"
+  }
 }
